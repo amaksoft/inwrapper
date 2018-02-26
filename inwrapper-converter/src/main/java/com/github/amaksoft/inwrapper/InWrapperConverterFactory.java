@@ -22,15 +22,24 @@ import java.util.Map;
  * <ul>
  * <li>set callback return type for the {@link Retrofit} interface method to desired field type<li/>
  * <li>annotate the {@link Retrofit} interface method with {@link InWrapper} with wrapper class argument<li/>
- * <li>implement and add a {@link ResponseUnwrapper} for the wrapper class in constructor argument<li/>
+ * <li>implement and add a {@link ResponseUnwrapper} for the wrapper class in the {@link Builder}<li/>
  * <ul/>
  * <p>
  * If request is to be sent in some wrapper:
  * <ul>
  * <li>set body type for the {@link Retrofit} interface method to actual data type<li/>
  * <li>annotate the corresponding {@link Retrofit} interface method parameter with {@link InWrapper} with wrapper class argument<li/>
- * <li>implement and add a {@link RequestPacker} for the wrapper class in constructor argument<li/>
+ * <li>implement and add a {@link RequestPacker} for the wrapper class in the {@link Builder}<li/>
  * <ul/>
+ * <p>
+ * Notes on wrapper types:<br/>
+ * <ul>
+ * <li>If wrapper is a simple class, the class will be used for further processing</li>
+ * <li>If wrapper is a generic class with exactly one type parameter,
+ * the default resolution strategy is to pass the type of wrapped data as type parameter for further processing</li>
+ * </ul>
+ * If wrapper is a generic class with more than one type parameter, or if you want to customize type parameter resolution
+ * for other cases, you need to implement a {@link TypeResolver} and register it in the {@link Builder}
  */
 @SuppressWarnings("WeakerAccess") // leave methods available for tests, we only have two classes in the package anyway
 public class InWrapperConverterFactory extends Converter.Factory {
@@ -293,7 +302,7 @@ public class InWrapperConverterFactory extends Converter.Factory {
             if (typeParams.length == 0) {
                 return wrapperClass;
             } else if (typeParams.length == 1) {
-                return createParametrizedType(null, wrapperClass, new Type[]{typeToWrap});
+                return createParametrizedType(wrapperClass, new Type[]{typeToWrap});
             } else {
                 throw new IllegalArgumentException("Unable to process " + wrapperClass.getSimpleName() + ". " + this.getClass().getSimpleName()
                         + " does not support wrapper classes with more than one type parameter. Please create a custom "
