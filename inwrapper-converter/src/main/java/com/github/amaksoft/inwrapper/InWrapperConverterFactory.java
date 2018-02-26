@@ -35,15 +35,19 @@ import java.util.Map;
 @SuppressWarnings("WeakerAccess") // leave methods available for tests, we only have two classes in the package anyway
 public class InWrapperConverterFactory extends Converter.Factory {
 
+    private static final TypeResolver DEFAULT_TYPE_RESOLVER = new DefaultTypeResolver();
+
     private final Map<Class, ResponseUnwrapper> responseUnwrappers;
     private final Map<Class, RequestPacker> requestPackers;
+    private final Map<Class, TypeResolver> typeResolvers;
 
     /**
      * Package private, not supposed to be used from outside. Please use {@link Builder}
      */
-    InWrapperConverterFactory(Map<Class, ResponseUnwrapper> responseUnwrappers, Map<Class, RequestPacker> requestPackers) {
+    InWrapperConverterFactory(Map<Class, ResponseUnwrapper> responseUnwrappers, Map<Class, RequestPacker> requestPackers, Map<Class, TypeResolver> typeResolvers) {
         this.responseUnwrappers = responseUnwrappers;
         this.requestPackers = requestPackers;
+        this.typeResolvers = typeResolvers;
     }
 
     /**
@@ -56,7 +60,7 @@ public class InWrapperConverterFactory extends Converter.Factory {
         final InWrapper wrapperAnno = findWrapperAnnotation(parameterAnnotations);
 
         if (wrapperAnno != null) {
-            Type wrappedType = getWrappedType(type, wrapperAnno.value());
+            Type wrappedType = getWrappedType(type, wrapperAnno.value(), parameterAnnotations, methodAnnotations);
             final Converter<Object, RequestBody> wrappedDelegate = retrofit.nextRequestBodyConverter(this, wrappedType, parameterAnnotations, methodAnnotations);
             return new Converter<Object, RequestBody>() {
                 @Override
@@ -79,7 +83,7 @@ public class InWrapperConverterFactory extends Converter.Factory {
 
         final InWrapper wrapperAnno = findWrapperAnnotation(annotations);
         if (wrapperAnno != null) {
-            Type wrappedType = getWrappedType(type, wrapperAnno.value());
+            Type wrappedType = getWrappedType(type, wrapperAnno.value(), null, annotations);
             final Converter<ResponseBody, ?> wrappedDelegate = retrofit.nextResponseBodyConverter(this, wrappedType, annotations);
             return new Converter<ResponseBody, Object>() {
                 @Override
@@ -116,18 +120,13 @@ public class InWrapperConverterFactory extends Converter.Factory {
      * @param wrapperClasses wrapper classes chain
      * @return wrapped data type
      */
-    static Type getWrappedType(Type dataType, Class[] wrapperClasses) {
+    Type getWrappedType(Type dataType, Class[] wrapperClasses, Annotation[] parameterAnnotations, Annotation[] methodAnnotations) {
         Type resultType = dataType;
         for (int i = wrapperClasses.length - 1; i >= 0; i--) {
             Class wrapperClass = wrapperClasses[i];
-            Type[] typeParams = wrapperClass.getTypeParameters();
-            if (typeParams.length == 0) {
-                resultType = wrapperClass;
-            } else if (typeParams.length == 1) {
-                resultType = new ParameterizedTypeImpl(null, wrapperClass, resultType);
-            } else {
-                throw new IllegalArgumentException("Unable to process " + wrapperClass + ". Generic classes with more than one type parameter are not supported");
-            }
+            TypeResolver resolver = typeResolvers.get(wrapperClass);
+            if (resolver == null) resolver = DEFAULT_TYPE_RESOLVER;
+            resultType = resolver.resolveType(dataType, wrapperClass, i, parameterAnnotations, methodAnnotations);
         }
         return resultType;
     }
@@ -141,7 +140,7 @@ public class InWrapperConverterFactory extends Converter.Factory {
      * @param methodAnnotations    interface method annotations
      * @return packed data
      */
-    Object chainPack(Object data, Class[] wrapperClasses, Annotation[] parameterAnnotations, Annotation[] methodAnnotations) {
+    Object chainPack(Object data, Class[] wrapperClasses, @Nullable Annotation[] parameterAnnotations, Annotation[] methodAnnotations) {
         Object packedData = data;
         for (int i = wrapperClasses.length - 1; i >= 0; i--) {
             Class wrapperClass = wrapperClasses[i];
@@ -218,7 +217,7 @@ public class InWrapperConverterFactory extends Converter.Factory {
          * Extracts desired field from response wrapper
          *
          * @param wrapper     parsed wrapper instance
-         * @param depth       wrapper chain depth
+         * @param depth       current wrapper chain depth
          * @param annotations interface method annotations to parametrize the process (if needed)
          * @return actual data value
          */
@@ -236,7 +235,7 @@ public class InWrapperConverterFactory extends Converter.Factory {
          * Packs request in wrapper
          *
          * @param data                 actual data
-         * @param depth                wrapper chain depth
+         * @param depth                current wrapper chain depth
          * @param parameterAnnotations parameter annotations to parametrize the process (if needed)
          * @param methodAnnotations    interface method annotations to parametrize the process (if needed)
          * @return wrapped request body instance
@@ -245,12 +244,72 @@ public class InWrapperConverterFactory extends Converter.Factory {
     }
 
     /**
+     * Abstract class for customizing wrapper type resolution if it is a generic with more than one type parameter
+     */
+    public static abstract class TypeResolver {
+        /**
+         * Resolves type for given wrapper class and data type
+         *
+         * @param typeToWrap           type to be wrapped in given wrapper
+         * @param wrapperClass         wrapper class
+         * @param depth                current wrapper chain depth
+         * @param parameterAnnotations parameter annotations to parametrize the process (if needed). Will be {@code null} for responses
+         * @param methodAnnotations    interface method annotations to parametrize the process (if needed)
+         * @return resolved wrapped type
+         */
+        abstract Type resolveType(Type typeToWrap, Class wrapperClass, int depth, Annotation[] parameterAnnotations, Annotation[] methodAnnotations);
+
+        /**
+         * Convenience method for creating a {@link ParameterizedType}
+         *
+         * @param ownerType     Qwner class type. For inner classes only, pass null if you don't know how to use it.
+         * @param rawType       Raw wrapper type. In most cases it is a wrapper class.
+         * @param typeArguments Generic parameters for raw type (in the same order they were declared in class). Parameters could also be a parametrized type.
+         * @return resolved wrapped type
+         */
+        protected ParameterizedType createParametrizedType(Type ownerType, Type rawType, Type[] typeArguments) {
+            return new ParameterizedTypeImpl(ownerType, rawType, typeArguments);
+        }
+
+        /**
+         * Convenience method for creating a {@link ParameterizedType}
+         *
+         * @param rawType       Raw wrapper type. In most cases it is a wrapper class.
+         * @param typeArguments Generic parameters for raw type (in the same order they were declared in class). Parameters could also be a parametrized type.
+         * @return resolved wrapped type
+         */
+        protected ParameterizedType createParametrizedType(Type rawType, Type[] typeArguments) {
+            return createParametrizedType(null, rawType, typeArguments);
+        }
+    }
+
+    /**
+     * Internal implementation of default type resolution strategy
+     */
+    private static final class DefaultTypeResolver extends TypeResolver {
+        @Override
+        Type resolveType(Type typeToWrap, Class wrapperClass, int depth, Annotation[] parameterAnnotations, Annotation[] methodAnnotations) {
+            Type[] typeParams = wrapperClass.getTypeParameters();
+            if (typeParams.length == 0) {
+                return wrapperClass;
+            } else if (typeParams.length == 1) {
+                return createParametrizedType(null, wrapperClass, new Type[]{typeToWrap});
+            } else {
+                throw new IllegalArgumentException("Unable to process " + wrapperClass.getSimpleName() + ". " + this.getClass().getSimpleName()
+                        + " does not support wrapper classes with more than one type parameter. Please create a custom "
+                        + TypeResolver.class.getName() + " implementation for " + wrapperClass.getName());
+            }
+        }
+    }
+
+    /**
      * Builder for {@link InWrapperConverterFactory}.
-     * Allows registering packers and unwrappers in a nice typesafe way
+     * Allows registering packers and unwrappers in a nice type safe way
      */
     public static class Builder {
-        private Map<Class, ResponseUnwrapper> responseUnwrappers = new HashMap<>();
-        private Map<Class, RequestPacker> requestPackers = new HashMap<>();
+        private final Map<Class, ResponseUnwrapper> responseUnwrappers = new HashMap<>();
+        private final Map<Class, RequestPacker> requestPackers = new HashMap<>();
+        private final Map<Class, TypeResolver> typeResolvers = new HashMap<>();
 
         /**
          * Registers a {@link ResponseUnwrapper}
@@ -279,12 +338,23 @@ public class InWrapperConverterFactory extends Converter.Factory {
         }
 
         /**
+         * Registers a {@link TypeResolver}
+         *
+         * @param wrapperClass class to resolve type for
+         * @param typeResolver the type resolver instance
+         */
+        public Builder registerTypeResolver(Class wrapperClass, TypeResolver typeResolver) {
+            typeResolvers.put(wrapperClass, typeResolver);
+            return this;
+        }
+
+        /**
          * Creates a {@link InWrapperConverterFactory} instance
          *
          * @return converter factory instance
          */
         public InWrapperConverterFactory build() {
-            return new InWrapperConverterFactory(responseUnwrappers, requestPackers);
+            return new InWrapperConverterFactory(responseUnwrappers, requestPackers, typeResolvers);
         }
     }
 }

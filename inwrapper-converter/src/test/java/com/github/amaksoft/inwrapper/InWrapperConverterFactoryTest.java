@@ -1,11 +1,13 @@
 package com.github.amaksoft.inwrapper;
 
+import com.google.gson.reflect.TypeToken;
 import org.junit.Test;
 
 import java.lang.annotation.Annotation;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.util.HashMap;
+import java.util.Map;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.core.Is.is;
@@ -47,8 +49,8 @@ public class InWrapperConverterFactoryTest {
             .build();
 
     @Test
-    public void testGetWrappedTypeSingleWrapperSingleTypeParameter() {
-        Type wrappedType = InWrapperConverterFactory.getWrappedType(String.class, new Class[]{TestWrapper.class});
+    public void testDefaultTypeResolverSingleWrapperSingleTypeParameter() {
+        Type wrappedType = factory.getWrappedType(String.class, new Class[]{TestWrapper.class}, new Annotation[]{}, new Annotation[]{});
 
         assertThat(wrappedType, instanceOf(ParameterizedType.class));
 
@@ -58,25 +60,62 @@ public class InWrapperConverterFactoryTest {
 
         Class wrapperClass = (Class) parametrizedWrappedType.getRawType();
 
-        assertThat(wrapperClass, is(equalTo((Class) TestWrapper.class)));
+        assertThat(wrapperClass, is(equalTo(TestWrapper.class)));
 
         assertThat(parametrizedWrappedType.getActualTypeArguments().length, is(equalTo(1)));
         assertThat(parametrizedWrappedType.getActualTypeArguments()[0], instanceOf(Class.class));
 
         Class wrappedClass = (Class) parametrizedWrappedType.getActualTypeArguments()[0];
 
-        assertThat(wrappedClass, is(equalTo((Class) String.class)));
+        assertThat(wrappedClass, is(equalTo(String.class)));
     }
 
     @Test(expected = IllegalArgumentException.class)
-    public void testGetWrappedTypeSingleWrapperTwoTypeParameters() {
-        // we don't support more than one type parameter for wrappers
-        InWrapperConverterFactory.getWrappedType(String.class, new Class[]{HashMap.Entry.class});
+    public void testDefaultTypeResolverSingleWrapperTwoTypeParameters() {
+        // we don't support more than one type parameter for wrappers by default
+        factory.getWrappedType(String.class, new Class[]{HashMap.Entry.class}, new Annotation[]{}, new Annotation[]{});
+    }
+
+    @Test()
+    public void testCustomTypeResolverSingleWrapperTwoTypeParameters() {
+        InWrapperConverterFactory.TypeResolver mapEntryResolver = new InWrapperConverterFactory.TypeResolver() {
+            @Override
+            Type resolveType(Type typeToWrap, Class wrapperClass, int depth, Annotation[] parameterAnnotations, Annotation[] methodAnnotations) {
+                return new TypeToken<Map.Entry<String, Integer>>() {
+                }.getType();
+            }
+        };
+
+        factory = new InWrapperConverterFactory.Builder()
+                .registerTypeResolver(Map.Entry.class, mapEntryResolver)
+                .build();
+
+        Type wrappedType = factory.getWrappedType(String.class, new Class[]{HashMap.Entry.class}, new Annotation[]{}, new Annotation[]{});
+
+        assertThat(wrappedType, instanceOf(ParameterizedType.class));
+
+        ParameterizedType parametrizedWrappedType = (ParameterizedType) wrappedType;
+
+        assertThat(parametrizedWrappedType.getRawType(), instanceOf(Class.class));
+
+        Class wrapperClass = (Class) parametrizedWrappedType.getRawType();
+
+        assertThat(wrapperClass, is(equalTo(Map.Entry.class)));
+
+        assertThat(parametrizedWrappedType.getActualTypeArguments().length, is(equalTo(2)));
+        assertThat(parametrizedWrappedType.getActualTypeArguments()[0], instanceOf(Class.class));
+        assertThat(parametrizedWrappedType.getActualTypeArguments()[1], instanceOf(Class.class));
+
+        Class firstParameter = (Class) parametrizedWrappedType.getActualTypeArguments()[0];
+        Class secondParameter = (Class) parametrizedWrappedType.getActualTypeArguments()[1];
+
+        assertThat(firstParameter, is(equalTo(String.class)));
+        assertThat(secondParameter, is(equalTo(Integer.class)));
     }
 
     @Test
-    public void testGetWrappedTypeNoTypeParameter() {
-        Type wrappedType = InWrapperConverterFactory.getWrappedType(String.class, new Class[]{Object.class, TestWrapper.class, TestWrapper.class});
+    public void testDefaultTypeResolverNoTypeParameter() {
+        Type wrappedType = factory.getWrappedType(String.class, new Class[]{Object.class, TestWrapper.class, TestWrapper.class}, new Annotation[]{}, new Annotation[]{});
 
         assertThat("Wrapper type is supposed to be a class", wrappedType, instanceOf(Class.class));
         assertThat("Root wrapper is Object, type should be just Class<Object>", (Class) wrappedType, is(equalTo((Class) Object.class)));
